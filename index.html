@@ -11,16 +11,22 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
+    :root {
+      /* 実際の画面高さを JS から入れる */
+      --app-height: 100vh;
+    }
+
     body {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: #020617;
       color: #e5e7eb;
       overflow: hidden;
+      height: var(--app-height);
     }
 
     .app {
       width: 100vw;
-      height: 100vh;
+      height: var(--app-height);
       display: flex;
       flex-direction: column;
       background: #020617;
@@ -96,6 +102,13 @@
       border-radius: 8px;
       padding: 8px 4px;
       min-height: 120px;
+    }
+
+    /* SVG がちゃんとクリックを拾えるように */
+    #osmd-container svg {
+      width: 100%;
+      height: auto;
+      pointer-events: auto;
     }
 
     .status-bar {
@@ -261,8 +274,7 @@
         <button class="btn note-name-btn active" data-step="C">C</button>
         <button class="btn note-name-btn" data-step="D">D</button>
         <button class="btn note-name-btn" data-step="E">E</button>
-        <button classument
-          class="btn note-name-btn" data-step="F">F</button>
+        <button class="btn note-name-btn" data-step="F">F</button>
         <button class="btn note-name-btn" data-step="G">G</button>
         <button class="btn note-name-btn" data-step="A">A</button>
         <button class="btn note-name-btn" data-step="B">B</button>
@@ -300,6 +312,17 @@
   </div>
 
   <script>
+    // 実際の画面高さを CSS 変数に反映
+    function setAppHeight() {
+      document.documentElement.style.setProperty(
+        "--app-height",
+        window.innerHeight + "px"
+      );
+    }
+    window.addEventListener("resize", setAppHeight);
+    window.addEventListener("orientationchange", setAppHeight);
+    setAppHeight();
+
     // OSMD インスタンス
     let osmd = null;
 
@@ -324,7 +347,6 @@
     function restoreHistory() {
       if (history.length === 0) return;
       events = history.pop();
-      // 直近のイベントを選択状態に
       selectedEventIndex = events.length - 1;
       renderScore();
     }
@@ -336,7 +358,6 @@
     }
 
     function durationToXml(durationType) {
-      // divisions = 4 前提の duration / type
       switch (durationType) {
         case "whole":   return { duration: 16, type: "whole", beats: 4 };
         case "half":    return { duration: 8,  type: "half",  beats: 2 };
@@ -350,7 +371,6 @@
     function getTimeSignatureValues() {
       const timeValue = document.getElementById("time-signature").value || "4/4";
       const [beats, beatType] = timeValue.split("/").map(v => parseInt(v, 10));
-      // 1小節あたりの「四分音符換算の拍数」
       const measureBeats = beats * (4 / beatType); // 6/8 → 6 * (4/8) = 3
       return { beats, beatType, measureBeats };
     }
@@ -365,7 +385,6 @@
 
       const divisions = 4;
 
-      // events 配列から measure を自動分割
       const measureXmlList = [];
       let currentMeasureNotes = [];
       let currentBeatSum = 0;
@@ -376,9 +395,7 @@
         const { duration, type, beats: evBeats } = durationToXml(ev.durationType);
         const beatLen = evBeats;
 
-        // このイベントを入れると小節をはみ出すなら新小節を開始
         if (currentBeatSum + beatLen > measureBeats + 1e-6 && currentMeasureNotes.length > 0) {
-          // 1小節分を保存
           const isFirstMeasure = measureIndex === 1;
           const measureXml = createMeasureXml(
             measureIndex,
@@ -397,13 +414,11 @@
           currentBeatSum = 0;
         }
 
-        // このイベント（和音含む）を note タグに変換
         const noteGroupXml = buildEventNotesXml(ev, duration, type);
         currentMeasureNotes.push(noteGroupXml);
         currentBeatSum += beatLen;
       }
 
-      // 最後の小節
       if (currentMeasureNotes.length > 0) {
         const isFirstMeasure = measureIndex === 1;
         const measureXml = createMeasureXml(
@@ -476,7 +491,6 @@ ${notesXml}
     }
 
     function buildEventNotesXml(ev, duration, type) {
-      // 和音対応：最初の音には <chord> を付けない、2音目以降には <chord/> を付ける
       return ev.chords.map((ch, idx) => {
         const alterTag = (ch.alter !== 0)
           ? `<alter>${ch.alter}</alter>`
@@ -533,7 +547,6 @@ ${notesXml}
 
       document.getElementById("status-count").textContent = String(events.length);
 
-      // 選択状態
       const selEl = document.getElementById("status-selected");
       if (selectedEventIndex < 0 || selectedEventIndex >= events.length) {
         selEl.textContent = "なし";
@@ -544,14 +557,12 @@ ${notesXml}
         selEl.textContent = `${selectedEventIndex + 1}番目: ${main.step}${acc}${main.octave}`;
       }
 
-      // 和音ボタンの状態
       const chordBtn = document.getElementById("btn-chord");
       chordBtn.classList.toggle("active", chordMode);
     }
 
     function addEventOrChord() {
       if (chordMode && events.length > 0) {
-        // 最後のイベントに和音として追加
         saveHistory();
         const lastEv = events[events.length - 1];
         lastEv.chords.push({
@@ -562,7 +573,6 @@ ${notesXml}
         selectedEventIndex = events.length - 1;
         renderScore();
       } else {
-        // 新しいイベントとして追加
         saveHistory();
         events.push({
           durationType: currentDuration,
@@ -606,12 +616,14 @@ ${notesXml}
         backend: "svg",
       });
 
-      // 初期レンダリング（空）
       renderScore();
 
-      // 楽譜クリック：現時点では「末尾に追加」＆「最後の音符を選択」
-      container.addEventListener("click", () => {
-        addEventOrChord();
+      // 楽譜クリック：SVG の上をクリックしたときだけ追加
+      container.addEventListener("click", (e) => {
+        const svg = container.querySelector("svg");
+        if (svg && svg.contains(e.target)) {
+          addEventOrChord();
+        }
       });
 
       // 音名ボタン
