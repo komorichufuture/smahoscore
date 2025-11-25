@@ -5,8 +5,8 @@
   <title>スマホ版 作曲アプリ（OSMD・小節＆和音対応）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
 
-  <!-- OSMD CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/opensheetmusicdisplay@1.8.6/build/opensheetmusicdisplay.min.js"></script>
+  <!-- OSMD CDN（最新版に更新） -->
+  <script src="https://cdn.jsdelivr.net/npm/opensheetmusicdisplay@1.8.8/build/opensheetmusicdisplay.min.js"></script>
 
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -98,7 +98,7 @@
     }
 
     #osmd-container {
-      background: #020617;
+      background: white;
       border-radius: 8px;
       padding: 8px 4px;
       min-height: 120px;
@@ -240,6 +240,8 @@
           <option value="-3">E♭（♭ 3）</option>
         </select>
       </div>
+
+      <button id="btn-export" class="header-toggle">エクスポート</button>
     </div>
 
     <!-- 楽譜表示エリア -->
@@ -297,10 +299,10 @@
       <!-- 行3：音価＋補助＋和音モード -->
       <div class="control-row" id="row-durations">
         <button class="btn duration-btn small" data-type="whole" data-symbol="𝅝">𝅝</button>
-        <button class="btn duration-btn small" data-type="half" data-symbol="𝅗𝅥">𝅗𝅥</button>
+        <button class="btn duration-btn small" data-type="half" data-symbol="𝅗𝅥">𝅗𝅥</button>
         <button class="btn duration-btn small active" data-type="quarter" data-symbol="♩">♩</button>
         <button class="btn duration-btn small" data-type="eighth" data-symbol="♪">♪</button>
-        <button class="btn duration-btn small" data-type="16th" data-symbol="𝅘𝅥">𝅘𝅥</button>
+        <button class="btn duration-btn small" data-type="16th" data-symbol="𝅘𝅥">𝅘𝅥</button>
 
         <button class="btn small accent" id="btn-octave-up">+8</button>
         <button class="btn small accent" id="btn-octave-down">-8</button>
@@ -385,6 +387,35 @@
 
       const divisions = 4;
 
+      // 音符がない場合は空の小節を1つ作る
+      if (events.length === 0) {
+        return `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.1 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
+<score-partwise version="3.1">
+  <part-list>
+    <score-part id="P1">
+      <part-name>Music</part-name>
+    </score-part>
+  </part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>${divisions}</divisions>
+        <key><fifths>${keyVal}</fifths></key>
+        <time><beats>${beats}</beats><beat-type>${beatType}</beat-type></time>
+        <clef><sign>${clefSign}</sign><line>${clefLine}</line></clef>
+      </attributes>
+      <note>
+        <rest/>
+        <duration>${divisions * beats}</duration>
+        <voice>1</voice>
+        <type>whole</type>
+      </note>
+    </measure>
+  </part>
+</score-partwise>`;
+      }
+
       const measureXmlList = [];
       let currentMeasureNotes = [];
       let currentBeatSum = 0;
@@ -395,11 +426,12 @@
         const { duration, type, beats: evBeats } = durationToXml(ev.durationType);
         const beatLen = evBeats;
 
-        if (currentBeatSum + beatLen > measureBeats + 1e-6 && currentMeasureNotes.length > 0) {
+        // 小節がいっぱいになったら新しい小節へ
+        if (currentBeatSum + beatLen > measureBeats + 0.0001 && currentMeasureNotes.length > 0) {
           const isFirstMeasure = measureIndex === 1;
           const measureXml = createMeasureXml(
             measureIndex,
-            currentMeasureNotes.join("\n"),
+            currentMeasureNotes,
             isFirstMeasure,
             divisions,
             keyVal,
@@ -419,11 +451,12 @@
         currentBeatSum += beatLen;
       }
 
+      // 最後の小節
       if (currentMeasureNotes.length > 0) {
         const isFirstMeasure = measureIndex === 1;
         const measureXml = createMeasureXml(
           measureIndex,
-          currentMeasureNotes.join("\n"),
+          currentMeasureNotes,
           isFirstMeasure,
           divisions,
           keyVal,
@@ -438,9 +471,7 @@
       const measuresXml = measureXmlList.join("\n");
 
       const xml = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<!DOCTYPE score-partwise PUBLIC
-  "-//Recordare//DTD MusicXML 3.1 Partwise//EN"
-  "http://www.musicxml.org/dtds/partwise.dtd">
+<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.1 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
 <score-partwise version="3.1">
   <part-list>
     <score-part id="P1">
@@ -448,23 +479,17 @@
     </score-part>
   </part-list>
   <part id="P1">
-${measuresXml || `
-    <measure number="1">
-      <attributes>
-        <divisions>${divisions}</divisions>
-        <key><fifths>${keyVal}</fifths></key>
-        <time><beats>${beats}</beats><beat-type>${beatType}</beat-type></time>
-        <clef><sign>${clefSign}</sign><line>${clefLine}</line></clef>
-      </attributes>
-    </measure>`}
+${measuresXml}
   </part>
 </score-partwise>`;
+
+      console.log("Generated MusicXML:", xml); // デバッグ用
       return xml;
     }
 
     function createMeasureXml(
       number,
-      notesXml,
+      noteGroups,
       isFirst,
       divisions,
       keyVal,
@@ -473,6 +498,8 @@ ${measuresXml || `
       clefSign,
       clefLine
     ) {
+      const notesXml = noteGroups.join("");
+      
       if (isFirst) {
         return `    <measure number="${number}">
       <attributes>
@@ -480,52 +507,63 @@ ${measuresXml || `
         <key><fifths>${keyVal}</fifths></key>
         <time><beats>${beats}</beats><beat-type>${beatType}</beat-type></time>
         <clef><sign>${clefSign}</sign><line>${clefLine}</line></clef>
-      </attributes>
-${notesXml}
+      </attributes>${notesXml}
     </measure>`;
       } else {
-        return `    <measure number="${number}">
-${notesXml}
+        return `    <measure number="${number}">${notesXml}
     </measure>`;
       }
     }
 
     function buildEventNotesXml(ev, duration, type) {
-      return ev.chords.map((ch, idx) => {
-        const alterTag = (ch.alter !== 0)
-          ? `<alter>${ch.alter}</alter>`
-          : "";
-        const accidentalTag = (ch.alter === 1)
-          ? `<accidental>sharp</accidental>`
-          : (ch.alter === -1)
-            ? `<accidental>flat</accidental>`
-            : "";
-        const chordTag = idx > 0 ? `<chord/>` : "";
-        return `
-      <note>
-        ${chordTag}
+      let xml = "";
+      ev.chords.forEach((ch, idx) => {
+        const alterTag = (ch.alter !== 0) ? `
+        <alter>${ch.alter}</alter>` : "";
+        
+        const accidentalTag = (ch.alter === 1) ? `
+        <accidental>sharp</accidental>` 
+          : (ch.alter === -1) ? `
+        <accidental>flat</accidental>` : "";
+        
+        const chordTag = idx > 0 ? `
+        <chord/>` : "";
+
+        xml += `
+      <note>${chordTag}
         <pitch>
-          <step>${ch.step}</step>
-          ${alterTag}
+          <step>${ch.step}</step>${alterTag}
           <octave>${ch.octave}</octave>
         </pitch>
         <duration>${duration}</duration>
         <voice>1</voice>
-        <type>${type}</type>
-        ${accidentalTag}
+        <type>${type}</type>${accidentalTag}
       </note>`;
-      }).join("\n");
+      });
+      return xml;
     }
 
     async function renderScore() {
       if (!osmd) return;
+      
       const xml = buildMusicXML();
+      
       try {
+        // OSMDをクリア
+        osmd.clear();
+        
+        // XMLを読み込み
         await osmd.load(xml);
+        
+        // レンダリング
         osmd.render();
+        
+        console.log("Score rendered successfully");
       } catch (e) {
-        console.error("OSMD render error", e);
+        console.error("OSMD render error:", e);
+        console.error("Failed XML:", xml);
       }
+      
       updateStatus();
     }
 
@@ -537,10 +575,10 @@ ${notesXml}
 
       const durationLabelMap = {
         whole: "whole (𝅝)",
-        half: "half (𝅗𝅥)",
+        half: "half (𝅗𝅥)",
         quarter: "quarter (♩)",
         eighth: "eighth (♪)",
-        "16th": "16th (𝅘𝅥)"
+        "16th": "16th (𝅘𝅥)"
       };
       document.getElementById("status-duration").textContent =
         durationLabelMap[currentDuration] || currentDuration;
@@ -558,7 +596,9 @@ ${notesXml}
       }
 
       const chordBtn = document.getElementById("btn-chord");
-      chordBtn.classList.toggle("active", chordMode);
+      if (chordBtn) {
+        chordBtn.classList.toggle("active", chordMode);
+      }
     }
 
     function addEventOrChord() {
@@ -606,29 +646,44 @@ ${notesXml}
       updateStatus();
     }
 
+    function exportMusicXML() {
+      const xml = buildMusicXML();
+      const blob = new Blob([xml], { type: "application/xml" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "score.xml";
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
     window.addEventListener("DOMContentLoaded", () => {
       const container = document.getElementById("osmd-container");
+      
+      // OSMD初期化
       osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay(container, {
         autoResize: true,
         drawPartNames: false,
-        drawMeasureNumbers: false,
+        drawMeasureNumbers: true,
         drawTitle: false,
         backend: "svg",
+        drawingParameters: "compact",
+        renderSingleHorizontalStaffline: false
       });
 
+      // 初期楽譜を描画
       renderScore();
 
-      // 楽譜クリック：SVG の上をクリックしたときだけ追加
+      // 楽譜クリック：楽譜エリア全体をクリック可能に
       container.addEventListener("click", (e) => {
-        const svg = container.querySelector("svg");
-        if (svg && svg.contains(e.target)) {
-          addEventOrChord();
-        }
+        // クリック位置に関係なく音符を追加
+        addEventOrChord();
       });
 
       // 音名ボタン
       document.querySelectorAll(".note-name-btn").forEach(btn => {
-        btn.addEventListener("click", () => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
           document.querySelectorAll(".note-name-btn").forEach(b => b.classList.remove("active"));
           btn.classList.add("active");
           currentStep = btn.dataset.step;
@@ -638,7 +693,8 @@ ${notesXml}
 
       // #, ♭, ♮
       document.querySelectorAll(".note-acc-btn").forEach(btn => {
-        btn.addEventListener("click", () => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
           document.querySelectorAll(".note-acc-btn").forEach(b => b.classList.remove("active"));
           btn.classList.add("active");
           currentAcc = btn.dataset.acc;
@@ -648,7 +704,8 @@ ${notesXml}
 
       // オクターブ
       document.querySelectorAll(".octave-btn").forEach(btn => {
-        btn.addEventListener("click", () => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
           document.querySelectorAll(".octave-btn").forEach(b => b.classList.remove("active"));
           btn.classList.add("active");
           currentOctave = parseInt(btn.dataset.oct, 10);
@@ -658,7 +715,8 @@ ${notesXml}
 
       // 音価
       document.querySelectorAll(".duration-btn").forEach(btn => {
-        btn.addEventListener("click", () => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
           document.querySelectorAll(".duration-btn").forEach(b => b.classList.remove("active"));
           btn.classList.add("active");
           currentDuration = btn.dataset.type;
@@ -667,23 +725,28 @@ ${notesXml}
       });
 
       // オクターブ ±8
-      document.getElementById("btn-octave-up").addEventListener("click", () => {
+      document.getElementById("btn-octave-up").addEventListener("click", (e) => {
+        e.stopPropagation();
         changeOctave(1);
       });
-      document.getElementById("btn-octave-down").addEventListener("click", () => {
+      document.getElementById("btn-octave-down").addEventListener("click", (e) => {
+        e.stopPropagation();
         changeOctave(-1);
       });
 
       // 削除・Undo
-      document.getElementById("btn-delete").addEventListener("click", () => {
+      document.getElementById("btn-delete").addEventListener("click", (e) => {
+        e.stopPropagation();
         deleteLastEvent();
       });
-      document.getElementById("btn-undo").addEventListener("click", () => {
+      document.getElementById("btn-undo").addEventListener("click", (e) => {
+        e.stopPropagation();
         restoreHistory();
       });
 
       // 和音モード
-      document.getElementById("btn-chord").addEventListener("click", () => {
+      document.getElementById("btn-chord").addEventListener("click", (e) => {
+        e.stopPropagation();
         chordMode = !chordMode;
         updateStatus();
       });
@@ -691,12 +754,14 @@ ${notesXml}
       // ト音/ヘ音
       const trebleBtn = document.getElementById("clef-treble");
       const bassBtn = document.getElementById("clef-bass");
-      trebleBtn.addEventListener("click", () => {
+      trebleBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
         trebleBtn.classList.add("active");
         bassBtn.classList.remove("active");
         renderScore();
       });
-      bassBtn.addEventListener("click", () => {
+      bassBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
         bassBtn.classList.add("active");
         trebleBtn.classList.remove("active");
         renderScore();
@@ -709,6 +774,15 @@ ${notesXml}
       document.getElementById("key-signature").addEventListener("change", () => {
         renderScore();
       });
+
+      // エクスポートボタン
+      const exportBtn = document.getElementById("btn-export");
+      if (exportBtn) {
+        exportBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          exportMusicXML();
+        });
+      }
 
       updateStatus();
     });
