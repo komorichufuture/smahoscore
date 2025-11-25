@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>スマホ版 作曲アプリ（付点 & タイ対応）</title>
+  <title>スマホ版 作曲アプリ（付点 & タイ & MusicXML対応）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
 
   <!-- OSMD CDN -->
@@ -63,16 +63,16 @@
       border-bottom: 1px solid #1e293b;
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       background: #020617;
-      font-size: 0.85rem;
+      font-size: 0.8rem;
       white-space: nowrap;
       overflow-x: auto;
     }
 
     .header-bar label {
       opacity: 0.8;
-      margin-right: 4px;
+      margin-right: 2px;
     }
 
     .header-select,
@@ -81,7 +81,7 @@
       color: #e5e7eb;
       border: 1px solid #1f2937;
       border-radius: 999px;
-      padding: 4px 10px;
+      padding: 4px 8px;
       font-size: 0.8rem;
       cursor: pointer;
     }
@@ -221,7 +221,7 @@
   </div>
 
   <div class="app">
-    <!-- ヘッダー：ト音/ヘ音・拍子・調・テンポ・再生 -->
+    <!-- ヘッダー：ト音/ヘ音・拍子・調・テンポ・MusicXML・再生 -->
     <div class="header-bar">
       <button id="clef-treble" class="header-toggle active">ト音</button>
       <button id="clef-bass" class="header-toggle">ヘ音</button>
@@ -262,7 +262,13 @@
         </select>
       </div>
 
+      <button id="btn-import" class="header-toggle">📤 読込</button>
+      <button id="btn-export" class="header-toggle">📥 保存</button>
       <button id="btn-play" class="header-toggle">▶ 再生</button>
+
+      <input type="file" id="musicxml-input"
+             accept=".musicxml,.xml,application/xml"
+             style="display:none" />
     </div>
 
     <!-- 楽譜表示 -->
@@ -362,7 +368,7 @@
     let chordMode = false;
     let restMode = false;
     let isDotted = false;
-    let tieMode = false; // 次に置く音に「次の音へタイ開始」を付ける
+    let tieMode = false; // true のとき「直前の音から今の音へタイ」
 
     // イベント配列
     // ev: {
@@ -530,11 +536,12 @@ ${notesXml}
       }
     }
 
-   function buildEventNotesXml(ev, duration, type, eventIndex) {
-  // 休符
-  if (ev.isRest || !ev.chords || ev.chords.length === 0) {
-    const dotTag = ev.isDotted ? `<dot/>` : "";
-    return `
+    // ★ タイを OSMD が理解できる <notations><tied> に変換
+    function buildEventNotesXml(ev, duration, type, eventIndex) {
+      // 休符
+      if (ev.isRest || !ev.chords || ev.chords.length === 0) {
+        const dotTag = ev.isDotted ? `<dot/>` : "";
+        return `
       <note>
         <rest/>
         <duration>${duration}</duration>
@@ -542,36 +549,34 @@ ${notesXml}
         <type>${type}</type>
         ${dotTag}
       </note>`;
-  }
+      }
 
-  const prevEv = events[eventIndex - 1];
-  const hasTieStop = !!(prevEv && prevEv.tiedToNext);
-  const hasTieStart = !!ev.tiedToNext;
-  const dotTag = ev.isDotted ? `<dot/>` : "";
+      const prevEv = events[eventIndex - 1];
+      const hasTieStop = !!(prevEv && prevEv.tiedToNext);
+      const hasTieStart = !!ev.tiedToNext;
+      const dotTag = ev.isDotted ? `<dot/>` : "";
 
-  // notations 内に <tied> を書く（これを OSMD が読んでタイを描く）
-  let notationsInner = "";
-  if (hasTieStop) {
-    notationsInner += `<tied type="stop"/>`;
-  }
-  if (hasTieStart) {
-    notationsInner += `<tied type="start"/>`;
-  }
-  const notationsTag = notationsInner
-    ? `<notations>${notationsInner}</notations>`
-    : "";
+      let notationsInner = "";
+      if (hasTieStop) {
+        notationsInner += `<tied type="stop"/>`;
+      }
+      if (hasTieStart) {
+        notationsInner += `<tied type="start"/>`;
+      }
+      const notationsTag = notationsInner
+        ? `<notations>${notationsInner}</notations>`
+        : "";
 
-  // 音符（和音対応）
-  return ev.chords
-    .map((ch, idx) => {
-      const alterTag =
-        ch.alter !== 0 ? `<alter>${ch.alter}</alter>` : "";
-      const accidentalTag =
-        ch.alter === 1 ? `<accidental>sharp</accidental>` :
-        ch.alter === -1 ? `<accidental>flat</accidental>` : "";
-      const chordTag = idx > 0 ? `<chord/>` : "";
+      return ev.chords
+        .map((ch, idx) => {
+          const alterTag =
+            ch.alter !== 0 ? `<alter>${ch.alter}</alter>` : "";
+          const accidentalTag =
+            ch.alter === 1 ? `<accidental>sharp</accidental>` :
+            ch.alter === -1 ? `<accidental>flat</accidental>` : "";
+          const chordTag = idx > 0 ? `<chord/>` : "";
 
-      return `
+          return `
       <note>
         ${chordTag}
         <pitch>
@@ -586,10 +591,9 @@ ${notesXml}
         ${accidentalTag}
         ${notationsTag}
       </note>`;
-    })
-    .join("\n");
-}
-
+        })
+        .join("\n");
+    }
 
     async function renderScore() {
       if (!osmd) return;
@@ -643,30 +647,67 @@ ${notesXml}
       document.getElementById("btn-tie").classList.toggle("active", tieMode);
     }
 
+    // ★ ここがタイ挙動を直した addEventOrChord
     function addEventOrChord() {
-  // 休符モード → 常に新しい休符イベント（タイは無視）
-  if (restMode) {
-    saveHistory();
-    events.push({
-      durationType: currentDuration,
-      isRest: true,
-      isDotted: isDotted,
-      tiedToNext: false,
-      chords: []
-    });
-    selectedEventIndex = events.length - 1;
-    renderScore();
-    return;
-  }
+      // 休符モード → 常に新しい休符イベント
+      if (restMode) {
+        saveHistory();
+        events.push({
+          durationType: currentDuration,
+          isRest: true,
+          isDotted: isDotted,
+          tiedToNext: false,
+          chords: []
+        });
+        selectedEventIndex = events.length - 1;
+        renderScore();
+        return;
+      }
 
-  // 和音モード：直前イベントに積む（直前が休符なら新規）
-  if (chordMode && events.length > 0) {
-    saveHistory();
-    const lastEv = events[events.length - 1];
+      // 和音モード：直前イベントに積む（直前が休符なら新規）
+      if (chordMode && events.length > 0) {
+        saveHistory();
+        const lastEv = events[events.length - 1];
 
-    if (lastEv.isRest) {
-      // 直前が休符なら新しい音符イベントを作る（休符とはタイで結ばない）
-      const newEv = {
+        if (lastEv.isRest) {
+          const newEv = {
+            durationType: currentDuration,
+            isRest: false,
+            isDotted: isDotted,
+            tiedToNext: false,
+            chords: [{
+              step: currentStep,
+              alter: getAccAlterFromCurrent(),
+              octave: currentOctave
+            }]
+          };
+          events.push(newEv);
+          selectedEventIndex = events.length - 1;
+        } else {
+          lastEv.chords.push({
+            step: currentStep,
+            alter: getAccAlterFromCurrent(),
+            octave: currentOctave
+          });
+          selectedEventIndex = events.length - 1;
+        }
+
+        renderScore();
+        return;
+      }
+
+      // 通常：単音イベント追加
+      saveHistory();
+
+      // タイモードが ON なら「直前の音符」から今回の音へタイを張る
+      if (tieMode && events.length > 0) {
+        const prevEv = events[events.length - 1];
+        if (!prevEv.isRest) {
+          prevEv.tiedToNext = true;
+        }
+      }
+
+      const newEvent = {
         durationType: currentDuration,
         isRest: false,
         isDotted: isDotted,
@@ -677,50 +718,11 @@ ${notesXml}
           octave: currentOctave
         }]
       };
-      events.push(newEv);
+
+      events.push(newEvent);
       selectedEventIndex = events.length - 1;
-    } else {
-      // 既存イベントに和音として積むだけなのでタイは関係なし
-      lastEv.chords.push({
-        step: currentStep,
-        alter: getAccAlterFromCurrent(),
-        octave: currentOctave
-      });
-      selectedEventIndex = events.length - 1;
+      renderScore();
     }
-
-    renderScore();
-    return;
-  }
-
-  // 通常：単音イベント追加
-  saveHistory();
-
-  // タイモードが ON なら「直前の音符」から今回の音へタイを張る
-  if (tieMode && events.length > 0) {
-    const prevEv = events[events.length - 1];
-    if (!prevEv.isRest) {
-      prevEv.tiedToNext = true;  // 直前の音が「次の音へタイ」になる
-    }
-  }
-
-  const newEvent = {
-    durationType: currentDuration,
-    isRest: false,
-    isDotted: isDotted,
-    tiedToNext: false, // 自分自身は「さらに次の音」へはタイしない
-    chords: [{
-      step: currentStep,
-      alter: getAccAlterFromCurrent(),
-      octave: currentOctave
-    }]
-  };
-
-  events.push(newEvent);
-  selectedEventIndex = events.length - 1;
-  renderScore();
-}
-
 
     function deleteLastEvent() {
       if (events.length === 0) return;
@@ -741,14 +743,167 @@ ${notesXml}
       updateStatus();
     }
 
+    // ★ MusicXML エクスポート
+    function exportMusicXML() {
+      const xml = buildMusicXML();
+      const blob = new Blob([xml], { type: "application/vnd.recordare.musicxml+xml" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const timestamp = new Date().toISOString().slice(0,19).replace(/:/g,"-");
+      a.download = `score_${timestamp}.musicxml`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // ★ MusicXML インポート → events[] 再構築
+    function importMusicXMLFromText(xmlText) {
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(xmlText, "application/xml");
+
+      const part = xmlDoc.querySelector("score-partwise > part");
+      if (!part) {
+        alert("読み込めるパートが見つかりませんでした。");
+        return;
+      }
+
+      // 1) attributes から拍子・調・記号・テンポを反映
+      const firstMeasure = part.querySelector("measure");
+      if (firstMeasure) {
+        const time = firstMeasure.querySelector("attributes > time");
+        if (time) {
+          const beats = time.querySelector("beats")?.textContent?.trim();
+          const beatType = time.querySelector("beat-type")?.textContent?.trim();
+          if (beats && beatType) {
+            const tsValue = `${beats}/${beatType}`;
+            const tsSelect = document.getElementById("time-signature");
+            const exists = Array.from(tsSelect.options).some(o => o.value === tsValue);
+            if (exists) tsSelect.value = tsValue;
+          }
+        }
+
+        const key = firstMeasure.querySelector("attributes > key > fifths");
+        if (key) {
+          const val = key.textContent.trim();
+          const ks = document.getElementById("key-signature");
+          const exists = Array.from(ks.options).some(o => o.value === val);
+          if (exists) ks.value = val;
+        }
+
+        const clefSignEl = firstMeasure.querySelector("attributes > clef > sign");
+        if (clefSignEl) {
+          const sign = clefSignEl.textContent.trim();
+          const trebleBtn = document.getElementById("clef-treble");
+          const bassBtn = document.getElementById("clef-bass");
+          if (sign === "F") {
+            bassBtn.classList.add("active");
+            trebleBtn.classList.remove("active");
+          } else {
+            trebleBtn.classList.add("active");
+            bassBtn.classList.remove("active");
+          }
+        }
+      }
+
+      const sound = xmlDoc.querySelector("sound[tempo]");
+      if (sound) {
+        const tempo = sound.getAttribute("tempo");
+        const tempoSelect = document.getElementById("tempo");
+        if (tempo && Array.from(tempoSelect.options).some(o => o.value === tempo)) {
+          tempoSelect.value = tempo;
+        }
+      }
+
+      // 2) notes → events[] に変換（和音・休符・付点・タイ対応の簡易版）
+      events = [];
+      history = [];
+      selectedEventIndex = -1;
+
+      let currentEvent = null;
+
+      const noteNodes = part.querySelectorAll("measure > note");
+      noteNodes.forEach(note => {
+        const isChord = !!note.querySelector("chord");
+        const isRest = !!note.querySelector("rest");
+
+        const typeEl = note.querySelector("type");
+        const typeText = typeEl ? typeEl.textContent.trim() : "quarter";
+        const map = {
+          "whole": "whole",
+          "half": "half",
+          "quarter": "quarter",
+          "eighth": "eighth",
+          "16th": "16th",
+          "32nd": "16th" // 32分音符はとりあえず16分扱い
+        };
+        const durationType = map[typeText] || "quarter";
+
+        const dotted = note.querySelectorAll("dot").length > 0;
+
+        // tie start 判定（<tie> と <notations><tied> 両方を見る）
+        let tiedStart = false;
+        note.querySelectorAll("tie").forEach(t => {
+          if (t.getAttribute("type") === "start") tiedStart = true;
+        });
+        note.querySelectorAll("notations > tied").forEach(t => {
+          if (t.getAttribute("type") === "start") tiedStart = true;
+        });
+
+        if (!isChord) {
+          // 前のイベントを確定
+          if (currentEvent) events.push(currentEvent);
+
+          currentEvent = {
+            durationType,
+            isRest,
+            isDotted: dotted,
+            tiedToNext: tiedStart,
+            chords: []
+          };
+        } else {
+          // chord の場合は直前イベントに積む（なければ作る）
+          if (!currentEvent) {
+            currentEvent = {
+              durationType,
+              isRest,
+              isDotted: dotted,
+              tiedToNext: tiedStart,
+              chords: []
+            };
+          } else {
+            // chord ノートにだけ tie start が付いている場合もあるので上書き
+            if (tiedStart) currentEvent.tiedToNext = true;
+          }
+        }
+
+        if (!isRest) {
+          const stepEl = note.querySelector("pitch > step");
+          const octaveEl = note.querySelector("pitch > octave");
+          const alterEl = note.querySelector("pitch > alter");
+
+          const step = stepEl ? stepEl.textContent.trim() : "C";
+          const octave = octaveEl ? parseInt(octaveEl.textContent.trim(), 10) || 4 : 4;
+          const alter = alterEl ? parseInt(alterEl.textContent.trim(), 10) || 0 : 0;
+
+          currentEvent.chords.push({ step, alter, octave });
+        }
+      });
+
+      if (currentEvent) events.push(currentEvent);
+      selectedEventIndex = events.length - 1;
+
+      renderScore();
+    }
+
     async function playScore() {
       if (isPlaying) {
         // 停止
         Tone.Transport.stop();
         Tone.Transport.cancel();
         isPlaying = false;
-        document.getElementById("btn-play").classList.remove("playing");
-        document.getElementById("btn-play").textContent = "▶ 再生";
+        const b = document.getElementById("btn-play");
+        b.classList.remove("playing");
+        b.textContent = "▶ 再生";
         return;
       }
 
@@ -757,14 +912,13 @@ ${notesXml}
         synth = new Tone.PolySynth(Tone.Synth).toDestination();
       }
 
-      // トランスポート初期化
       Tone.Transport.stop();
       Tone.Transport.cancel();
 
       const tempo = parseInt(document.getElementById("tempo").value || "120", 10);
       Tone.Transport.bpm.value = tempo;
 
-      let currentBeat = 0; // 拍ベース
+      let currentBeat = 0;
 
       let i = 0;
       while (i < events.length) {
@@ -789,8 +943,8 @@ ${notesXml}
             return `${ch.step}${acc}${ch.octave}`;
           });
 
-          const startTime = `${currentBeat} * 4n`; // 4分音符単位
-          const durBeats = totalBeats;            // 1拍=4分音符
+          const startTime = `${currentBeat} * 4n`;
+          const durBeats = totalBeats;
           synth.triggerAttackRelease(
             notes,
             `${durBeats} * 4n`,
@@ -802,7 +956,6 @@ ${notesXml}
         i = j + 1;
       }
 
-      // 再生終了でボタン状態を戻す
       const totalSeconds = Tone.Time(`${currentBeat} * 4n`).toSeconds();
       setTimeout(() => {
         isPlaying = false;
@@ -957,6 +1110,36 @@ ${notesXml}
       // 拍子・調変更
       document.getElementById("time-signature").addEventListener("change", renderScore);
       document.getElementById("key-signature").addEventListener("change", renderScore);
+
+      // MusicXML 読み込み
+      const fileInput = document.getElementById("musicxml-input");
+      document.getElementById("btn-import").addEventListener("click", (e) => {
+        e.stopPropagation();
+        fileInput.click();
+      });
+      fileInput.addEventListener("change", (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          const text = ev.target.result;
+          try {
+            importMusicXMLFromText(text);
+          } catch (err) {
+            console.error(err);
+            alert("MusicXMLの読み込みに失敗しました。");
+          }
+        };
+        reader.readAsText(file);
+        // 同じファイルを続けて読めるようにクリア
+        e.target.value = "";
+      });
+
+      // MusicXML 保存
+      document.getElementById("btn-export").addEventListener("click", (e) => {
+        e.stopPropagation();
+        exportMusicXML();
+      });
 
       // 再生
       document.getElementById("btn-play").addEventListener("click", (e) => {
