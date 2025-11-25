@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>スマホ版 作曲アプリ（OSMD・小節＆和音対応）</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+
+  <!-- OSMD CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/opensheetmusicdisplay@1.8.6/build/opensheetmusicdisplay.min.js"></script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #020617;
+      color: #e5e7eb;
+      overflow: hidden;
+    }
+
+    .app {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background: #020617;
+    }
+
+    /* 縦向き警告 */
+    .rotate-warning {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: #020617;
+      color: #e5e7eb;
+      z-index: 9999;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      padding: 24px;
+      font-size: 1.2rem;
+    }
+
+    @media screen and (orientation: portrait) {
+      .rotate-warning {
+        display: flex;
+      }
+      .app {
+        display: none;
+      }
+    }
+
+    .header-bar {
+      flex: 0 0 auto;
+      padding: 6px 10px;
+      border-bottom: 1px solid #1e293b;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #020617;
+      font-size: 0.85rem;
+      white-space: nowrap;
+      overflow-x: auto;
+    }
+
+    .header-bar label {
+      opacity: 0.8;
+      margin-right: 4px;
+    }
+
+    .header-select,
+    .header-toggle {
+      background: #0f172a;
+      color: #e5e7eb;
+      border: 1px solid #1f2937;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 0.8rem;
+    }
+
+    .header-toggle.active {
+      border-color: #38bdf8;
+      box-shadow: 0 0 0 1px #38bdf866;
+    }
+
+    .score-container {
+      flex: 1;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 6px 4px 4px 4px;
+      background: #0b1120;
+    }
+
+    #osmd-container {
+      background: #020617;
+      border-radius: 8px;
+      padding: 8px 4px;
+      min-height: 120px;
+    }
+
+    .status-bar {
+      flex: 0 0 auto;
+      padding: 4px 10px;
+      font-size: 0.75rem;
+      border-top: 1px solid #1e293b;
+      border-bottom: 1px solid #1e293b;
+      background: #020617;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      white-space: nowrap;
+      overflow-x: auto;
+    }
+
+    .status-label {
+      opacity: 0.8;
+    }
+
+    .status-value {
+      font-weight: 600;
+      color: #38bdf8;
+    }
+
+    .controls {
+      flex: 0 0 auto;
+      padding: 4px 4px 6px 4px;
+      background: #020617;
+      border-top: 1px solid #1e293b;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .control-row {
+      display: flex;
+      gap: 4px;
+      justify-content: center;
+    }
+
+    .btn {
+      flex: 1;
+      min-width: 0;
+      padding: 6px 4px;
+      border-radius: 999px;
+      border: 1px solid #1f2937;
+      background: #0f172a;
+      color: #e5e7eb;
+      font-size: 0.85rem;
+      text-align: center;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .btn.small {
+      font-size: 0.75rem;
+      padding: 4px 2px;
+    }
+
+    .btn.wide {
+      flex: 1.5;
+    }
+
+    .btn.active {
+      background: #38bdf8;
+      color: #020617;
+      border-color: #38bdf8;
+    }
+
+    .btn.accent {
+      border-color: #f97316;
+      color: #fed7aa;
+    }
+
+    .btn.danger {
+      border-color: #f97373;
+      color: #fecaca;
+    }
+
+    .btn:active {
+      transform: translateY(1px);
+      filter: brightness(1.1);
+    }
+
+    @media (max-width: 800px) {
+      .btn {
+        font-size: 0.8rem;
+      }
+      .header-bar {
+        font-size: 0.75rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="rotate-warning">
+    📱 この作曲アプリは横画面用です。<br><br>
+    スマホを横向きにしてください。
+  </div>
+
+  <div class="app">
+    <!-- 楽譜ヘッダー：ト音/ヘ音・拍子・調号 -->
+    <div class="header-bar">
+      <button id="clef-treble" class="header-toggle active">ト音記号</button>
+      <button id="clef-bass" class="header-toggle">ヘ音記号</button>
+
+      <div>
+        <label for="time-signature">拍子</label>
+        <select id="time-signature" class="header-select">
+          <option value="4/4">4/4</option>
+          <option value="3/4">3/4</option>
+          <option value="2/4">2/4</option>
+          <option value="6/8">6/8</option>
+        </select>
+      </div>
+
+      <div>
+        <label for="key-signature">調</label>
+        <select id="key-signature" class="header-select">
+          <option value="0">C（♮ 0）</option>
+          <option value="1">G（♯ 1）</option>
+          <option value="2">D（♯ 2）</option>
+          <option value="3">A（♯ 3）</option>
+          <option value="4">E（♯ 4）</option>
+          <option value="5">B（♯ 5）</option>
+          <option value="-1">F（♭ 1）</option>
+          <option value="-2">B♭（♭ 2）</option>
+          <option value="-3">E♭（♭ 3）</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- 楽譜表示エリア -->
+    <div class="score-container">
+      <div id="osmd-container"></div>
+    </div>
+
+    <!-- 現在状態表示 -->
+    <div class="status-bar">
+      <div>
+        <span class="status-label">現在の音：</span>
+        <span id="status-pitch" class="status-value">C4</span>
+      </div>
+      <div>
+        <span class="status-label">音価：</span>
+        <span id="status-duration" class="status-value">quarter (♩)</span>
+      </div>
+      <div>
+        <span class="status-label">音符数：</span>
+        <span id="status-count" class="status-value">0</span>
+      </div>
+      <div>
+        <span class="status-label">選択中：</span>
+        <span id="status-selected" class="status-value">なし</span>
+      </div>
+    </div>
+
+    <!-- 操作パネル（3行） -->
+    <div class="controls">
+      <!-- 行1：音名＋# / ♭ -->
+      <div class="control-row" id="row-note-names">
+        <button class="btn note-name-btn active" data-step="C">C</button>
+        <button class="btn note-name-btn" data-step="D">D</button>
+        <button class="btn note-name-btn" data-step="E">E</button>
+        <button classument
+          class="btn note-name-btn" data-step="F">F</button>
+        <button class="btn note-name-btn" data-step="G">G</button>
+        <button class="btn note-name-btn" data-step="A">A</button>
+        <button class="btn note-name-btn" data-step="B">B</button>
+        <button class="btn note-acc-btn" data-acc="sharp">#</button>
+        <button class="btn note-acc-btn" data-acc="flat">♭</button>
+        <button class="btn note-acc-btn active" data-acc="natural">♮</button>
+      </div>
+
+      <!-- 行2：オクターブ -->
+      <div class="control-row" id="row-octaves">
+        <button class="btn octave-btn" data-oct="1">1</button>
+        <button class="btn octave-btn" data-oct="2">2</button>
+        <button class="btn octave-btn" data-oct="3">3</button>
+        <button class="btn octave-btn active" data-oct="4">4</button>
+        <button class="btn octave-btn" data-oct="5">5</button>
+        <button class="btn octave-btn" data-oct="6">6</button>
+        <button class="btn octave-btn" data-oct="7">7</button>
+      </div>
+
+      <!-- 行3：音価＋補助＋和音モード -->
+      <div class="control-row" id="row-durations">
+        <button class="btn duration-btn small" data-type="whole" data-symbol="𝅝">𝅝</button>
+        <button class="btn duration-btn small" data-type="half" data-symbol="𝅗𝅥">𝅗𝅥</button>
+        <button class="btn duration-btn small active" data-type="quarter" data-symbol="♩">♩</button>
+        <button class="btn duration-btn small" data-type="eighth" data-symbol="♪">♪</button>
+        <button class="btn duration-btn small" data-type="16th" data-symbol="𝅘𝅥">𝅘𝅥</button>
+
+        <button class="btn small accent" id="btn-octave-up">+8</button>
+        <button class="btn small accent" id="btn-octave-down">-8</button>
+        <button class="btn small danger" id="btn-delete">Del</button>
+        <button class="btn small" id="btn-undo">Undo</button>
+        <button class="btn small" id="btn-chord">和音</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // OSMD インスタンス
+    let osmd = null;
+
+    // 現在の設定
+    let currentStep = "C";      // C, D, E, F, G, A, B
+    let currentAcc = "natural"; // natural | sharp | flat
+    let currentOctave = 4;      // 1〜7
+    let currentDuration = "quarter"; // whole | half | quarter | eighth | 16th
+    let chordMode = false;      // true のときは「和音追加モード」
+
+    // イベント配列
+    // event: { durationType: "quarter", chords: [{ step, alter, octave }] }
+    let events = [];
+    let history = [];
+    let selectedEventIndex = -1; // 最後に置いた音符を選択
+
+    function saveHistory() {
+      history.push(JSON.parse(JSON.stringify(events)));
+      if (history.length > 50) history.shift();
+    }
+
+    function restoreHistory() {
+      if (history.length === 0) return;
+      events = history.pop();
+      // 直近のイベントを選択状態に
+      selectedEventIndex = events.length - 1;
+      renderScore();
+    }
+
+    function getAccAlterFromCurrent() {
+      if (currentAcc === "sharp") return 1;
+      if (currentAcc === "flat") return -1;
+      return 0;
+    }
+
+    function durationToXml(durationType) {
+      // divisions = 4 前提の duration / type
+      switch (durationType) {
+        case "whole":   return { duration: 16, type: "whole", beats: 4 };
+        case "half":    return { duration: 8,  type: "half",  beats: 2 };
+        case "quarter": return { duration: 4,  type: "quarter", beats: 1 };
+        case "eighth":  return { duration: 2,  type: "eighth", beats: 0.5 };
+        case "16th":    return { duration: 1,  type: "16th", beats: 0.25 };
+        default:        return { duration: 4,  type: "quarter", beats: 1 };
+      }
+    }
+
+    function getTimeSignatureValues() {
+      const timeValue = document.getElementById("time-signature").value || "4/4";
+      const [beats, beatType] = timeValue.split("/").map(v => parseInt(v, 10));
+      // 1小節あたりの「四分音符換算の拍数」
+      const measureBeats = beats * (4 / beatType); // 6/8 → 6 * (4/8) = 3
+      return { beats, beatType, measureBeats };
+    }
+
+    function buildMusicXML() {
+      const { beats, beatType, measureBeats } = getTimeSignatureValues();
+      const keyVal = parseInt(document.getElementById("key-signature").value || "0", 10);
+
+      const clefTrebleActive = document.getElementById("clef-treble").classList.contains("active");
+      const clefSign = clefTrebleActive ? "G" : "F";
+      const clefLine = clefTrebleActive ? 2 : 4;
+
+      const divisions = 4;
+
+      // events 配列から measure を自動分割
+      const measureXmlList = [];
+      let currentMeasureNotes = [];
+      let currentBeatSum = 0;
+      let measureIndex = 1;
+
+      for (let i = 0; i < events.length; i++) {
+        const ev = events[i];
+        const { duration, type, beats: evBeats } = durationToXml(ev.durationType);
+        const beatLen = evBeats;
+
+        // このイベントを入れると小節をはみ出すなら新小節を開始
+        if (currentBeatSum + beatLen > measureBeats + 1e-6 && currentMeasureNotes.length > 0) {
+          // 1小節分を保存
+          const isFirstMeasure = measureIndex === 1;
+          const measureXml = createMeasureXml(
+            measureIndex,
+            currentMeasureNotes.join("\n"),
+            isFirstMeasure,
+            divisions,
+            keyVal,
+            beats,
+            beatType,
+            clefSign,
+            clefLine
+          );
+          measureXmlList.push(measureXml);
+          measureIndex++;
+          currentMeasureNotes = [];
+          currentBeatSum = 0;
+        }
+
+        // このイベント（和音含む）を note タグに変換
+        const noteGroupXml = buildEventNotesXml(ev, duration, type);
+        currentMeasureNotes.push(noteGroupXml);
+        currentBeatSum += beatLen;
+      }
+
+      // 最後の小節
+      if (currentMeasureNotes.length > 0) {
+        const isFirstMeasure = measureIndex === 1;
+        const measureXml = createMeasureXml(
+          measureIndex,
+          currentMeasureNotes.join("\n"),
+          isFirstMeasure,
+          divisions,
+          keyVal,
+          beats,
+          beatType,
+          clefSign,
+          clefLine
+        );
+        measureXmlList.push(measureXml);
+      }
+
+      const measuresXml = measureXmlList.join("\n");
+
+      const xml = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE score-partwise PUBLIC
+  "-//Recordare//DTD MusicXML 3.1 Partwise//EN"
+  "http://www.musicxml.org/dtds/partwise.dtd">
+<score-partwise version="3.1">
+  <part-list>
+    <score-part id="P1">
+      <part-name>Music</part-name>
+    </score-part>
+  </part-list>
+  <part id="P1">
+${measuresXml || `
+    <measure number="1">
+      <attributes>
+        <divisions>${divisions}</divisions>
+        <key><fifths>${keyVal}</fifths></key>
+        <time><beats>${beats}</beats><beat-type>${beatType}</beat-type></time>
+        <clef><sign>${clefSign}</sign><line>${clefLine}</line></clef>
+      </attributes>
+    </measure>`}
+  </part>
+</score-partwise>`;
+      return xml;
+    }
+
+    function createMeasureXml(
+      number,
+      notesXml,
+      isFirst,
+      divisions,
+      keyVal,
+      beats,
+      beatType,
+      clefSign,
+      clefLine
+    ) {
+      if (isFirst) {
+        return `    <measure number="${number}">
+      <attributes>
+        <divisions>${divisions}</divisions>
+        <key><fifths>${keyVal}</fifths></key>
+        <time><beats>${beats}</beats><beat-type>${beatType}</beat-type></time>
+        <clef><sign>${clefSign}</sign><line>${clefLine}</line></clef>
+      </attributes>
+${notesXml}
+    </measure>`;
+      } else {
+        return `    <measure number="${number}">
+${notesXml}
+    </measure>`;
+      }
+    }
+
+    function buildEventNotesXml(ev, duration, type) {
+      // 和音対応：最初の音には <chord> を付けない、2音目以降には <chord/> を付ける
+      return ev.chords.map((ch, idx) => {
+        const alterTag = (ch.alter !== 0)
+          ? `<alter>${ch.alter}</alter>`
+          : "";
+        const accidentalTag = (ch.alter === 1)
+          ? `<accidental>sharp</accidental>`
+          : (ch.alter === -1)
+            ? `<accidental>flat</accidental>`
+            : "";
+        const chordTag = idx > 0 ? `<chord/>` : "";
+        return `
+      <note>
+        ${chordTag}
+        <pitch>
+          <step>${ch.step}</step>
+          ${alterTag}
+          <octave>${ch.octave}</octave>
+        </pitch>
+        <duration>${duration}</duration>
+        <voice>1</voice>
+        <type>${type}</type>
+        ${accidentalTag}
+      </note>`;
+      }).join("\n");
+    }
+
+    async function renderScore() {
+      if (!osmd) return;
+      const xml = buildMusicXML();
+      try {
+        await osmd.load(xml);
+        osmd.render();
+      } catch (e) {
+        console.error("OSMD render error", e);
+      }
+      updateStatus();
+    }
+
+    function updateStatus() {
+      const accSymbol = currentAcc === "sharp" ? "#" :
+                        currentAcc === "flat" ? "b" : "";
+      const pitchStr = `${currentStep}${accSymbol}${currentOctave}`;
+      document.getElementById("status-pitch").textContent = pitchStr;
+
+      const durationLabelMap = {
+        whole: "whole (𝅝)",
+        half: "half (𝅗𝅥)",
+        quarter: "quarter (♩)",
+        eighth: "eighth (♪)",
+        "16th": "16th (𝅘𝅥)"
+      };
+      document.getElementById("status-duration").textContent =
+        durationLabelMap[currentDuration] || currentDuration;
+
+      document.getElementById("status-count").textContent = String(events.length);
+
+      // 選択状態
+      const selEl = document.getElementById("status-selected");
+      if (selectedEventIndex < 0 || selectedEventIndex >= events.length) {
+        selEl.textContent = "なし";
+      } else {
+        const ev = events[selectedEventIndex];
+        const main = ev.chords[0];
+        const acc = main.alter === 1 ? "#" : main.alter === -1 ? "b" : "";
+        selEl.textContent = `${selectedEventIndex + 1}番目: ${main.step}${acc}${main.octave}`;
+      }
+
+      // 和音ボタンの状態
+      const chordBtn = document.getElementById("btn-chord");
+      chordBtn.classList.toggle("active", chordMode);
+    }
+
+    function addEventOrChord() {
+      if (chordMode && events.length > 0) {
+        // 最後のイベントに和音として追加
+        saveHistory();
+        const lastEv = events[events.length - 1];
+        lastEv.chords.push({
+          step: currentStep,
+          alter: getAccAlterFromCurrent(),
+          octave: currentOctave
+        });
+        selectedEventIndex = events.length - 1;
+        renderScore();
+      } else {
+        // 新しいイベントとして追加
+        saveHistory();
+        events.push({
+          durationType: currentDuration,
+          chords: [{
+            step: currentStep,
+            alter: getAccAlterFromCurrent(),
+            octave: currentOctave
+          }]
+        });
+        selectedEventIndex = events.length - 1;
+        renderScore();
+      }
+    }
+
+    function deleteLastEvent() {
+      if (events.length === 0) return;
+      saveHistory();
+      events.pop();
+      selectedEventIndex = events.length - 1;
+      renderScore();
+    }
+
+    function changeOctave(delta) {
+      let newOct = currentOctave + delta;
+      if (newOct < 1) newOct = 1;
+      if (newOct > 7) newOct = 7;
+      currentOctave = newOct;
+      document.querySelectorAll(".octave-btn").forEach(btn => {
+        btn.classList.toggle("active", parseInt(btn.dataset.oct, 10) === currentOctave);
+      });
+      updateStatus();
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      const container = document.getElementById("osmd-container");
+      osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay(container, {
+        autoResize: true,
+        drawPartNames: false,
+        drawMeasureNumbers: false,
+        drawTitle: false,
+        backend: "svg",
+      });
+
+      // 初期レンダリング（空）
+      renderScore();
+
+      // 楽譜クリック：現時点では「末尾に追加」＆「最後の音符を選択」
+      container.addEventListener("click", () => {
+        addEventOrChord();
+      });
+
+      // 音名ボタン
+      document.querySelectorAll(".note-name-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          document.querySelectorAll(".note-name-btn").forEach(b => b.classList.remove("active"));
+          btn.classList.add("active");
+          currentStep = btn.dataset.step;
+          updateStatus();
+        });
+      });
+
+      // #, ♭, ♮
+      document.querySelectorAll(".note-acc-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          document.querySelectorAll(".note-acc-btn").forEach(b => b.classList.remove("active"));
+          btn.classList.add("active");
+          currentAcc = btn.dataset.acc;
+          updateStatus();
+        });
+      });
+
+      // オクターブ
+      document.querySelectorAll(".octave-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          document.querySelectorAll(".octave-btn").forEach(b => b.classList.remove("active"));
+          btn.classList.add("active");
+          currentOctave = parseInt(btn.dataset.oct, 10);
+          updateStatus();
+        });
+      });
+
+      // 音価
+      document.querySelectorAll(".duration-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          document.querySelectorAll(".duration-btn").forEach(b => b.classList.remove("active"));
+          btn.classList.add("active");
+          currentDuration = btn.dataset.type;
+          updateStatus();
+        });
+      });
+
+      // オクターブ ±8
+      document.getElementById("btn-octave-up").addEventListener("click", () => {
+        changeOctave(1);
+      });
+      document.getElementById("btn-octave-down").addEventListener("click", () => {
+        changeOctave(-1);
+      });
+
+      // 削除・Undo
+      document.getElementById("btn-delete").addEventListener("click", () => {
+        deleteLastEvent();
+      });
+      document.getElementById("btn-undo").addEventListener("click", () => {
+        restoreHistory();
+      });
+
+      // 和音モード
+      document.getElementById("btn-chord").addEventListener("click", () => {
+        chordMode = !chordMode;
+        updateStatus();
+      });
+
+      // ト音/ヘ音
+      const trebleBtn = document.getElementById("clef-treble");
+      const bassBtn = document.getElementById("clef-bass");
+      trebleBtn.addEventListener("click", () => {
+        trebleBtn.classList.add("active");
+        bassBtn.classList.remove("active");
+        renderScore();
+      });
+      bassBtn.addEventListener("click", () => {
+        bassBtn.classList.add("active");
+        trebleBtn.classList.remove("active");
+        renderScore();
+      });
+
+      // 拍子・調変更
+      document.getElementById("time-signature").addEventListener("change", () => {
+        renderScore();
+      });
+      document.getElementById("key-signature").addEventListener("change", () => {
+        renderScore();
+      });
+
+      updateStatus();
+    });
+  </script>
+</body>
+</html>
