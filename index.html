@@ -759,72 +759,73 @@ ${notesXml}
     }
 
     function addEventOrChord() {
-      if (selectionMode) {
-        // 選択モード中は新規追加しない
-        return;
-      }
+  const hasSelection =
+    selectionMode &&
+    selectedEventIndex >= 0 &&
+    selectedEventIndex < events.length;
 
-      // 休符モード → 常に新しい休符イベント
-      if (restMode) {
-        saveHistory();
-        events.push({
-          durationType: currentDuration,
-          isRest: true,
-          isDotted: isDotted,
-          tiedToNext: false,
-          dynamics: currentDynamics,
-          chords: []
-        });
-        selectedEventIndex = events.length - 1;
-        renderScore();
-        return;
-      }
+  // 挿入位置：デフォルトは末尾、選択モード中は「選択中の次」
+  let insertIndex = events.length;
+  if (hasSelection) {
+    insertIndex = selectedEventIndex + 1;
+  }
 
-      // 和音モード：直前イベントに積む
-      if (chordMode && events.length > 0) {
-        saveHistory();
-        const lastEv = events[events.length - 1];
+  // --- 休符モード ---
+  if (restMode) {
+    saveHistory();
+    const newEv = {
+      durationType: currentDuration,
+      isRest: true,
+      isDotted: isDotted,
+      tiedToNext: false,
+      dynamics: currentDynamics,
+      chords: []
+    };
 
-        if (lastEv.isRest) {
-          const newEv = {
-            durationType: currentDuration,
-            isRest: false,
-            isDotted: isDotted,
-            tiedToNext: false,
-            dynamics: currentDynamics,
-            chords: [{
-              step: currentStep,
-              alter: getAccAlterFromCurrent(),
-              octave: currentOctave
-            }]
-          };
-          events.push(newEv);
-          selectedEventIndex = events.length - 1;
-        } else {
-          lastEv.chords.push({
-            step: currentStep,
-            alter: getAccAlterFromCurrent(),
-            octave: currentOctave
-          });
-          selectedEventIndex = events.length - 1;
-        }
+    if (hasSelection) {
+      events.splice(insertIndex, 0, newEv);
+      selectedEventIndex = insertIndex;
+    } else {
+      events.push(newEv);
+      selectedEventIndex = events.length - 1;
+    }
 
-        renderScore();
-        return;
-      }
+    renderScore();
+    return;
+  }
 
-      // 通常：単音イベント追加
+  // --- 和音モード ---
+  if (chordMode) {
+    // 1音も無いとき → 新規イベントを挿入
+    if (events.length === 0) {
       saveHistory();
+      const newEv = {
+        durationType: currentDuration,
+        isRest: false,
+        isDotted: isDotted,
+        tiedToNext: false,
+        dynamics: currentDynamics,
+        chords: [{
+          step: currentStep,
+          alter: getAccAlterFromCurrent(),
+          octave: currentOctave
+        }]
+      };
+      events.push(newEv);
+      selectedEventIndex = events.length - 1;
+      renderScore();
+      return;
+    }
 
-      // タイモードが ON なら「直前の音符」から今回の音へタイを張る
-      if (tieMode && events.length > 0) {
-        const prevEv = events[events.length - 1];
-        if (!prevEv.isRest) {
-          prevEv.tiedToNext = true;
-        }
-      }
+    saveHistory();
 
-      const newEvent = {
+    // 和音を積むターゲット
+    let targetIndex = hasSelection ? selectedEventIndex : events.length - 1;
+    let targetEv = events[targetIndex];
+
+    // 休符には和音を積めないので、新規イベントを「後ろに挿入」
+    if (targetEv.isRest) {
+      const newEv = {
         durationType: currentDuration,
         isRest: false,
         isDotted: isDotted,
@@ -837,10 +838,59 @@ ${notesXml}
         }]
       };
 
-      events.push(newEvent);
-      selectedEventIndex = events.length - 1;
-      renderScore();
+      const idx = hasSelection ? (targetIndex + 1) : events.length;
+      events.splice(idx, 0, newEv);
+      selectedEventIndex = idx;
+    } else {
+      // 既存イベントに縦に積む（和音）
+      targetEv.chords.push({
+        step: currentStep,
+        alter: getAccAlterFromCurrent(),
+        octave: currentOctave
+      });
+      selectedEventIndex = targetIndex;
     }
+
+    renderScore();
+    return;
+  }
+
+  // --- 通常の単音追加（タイ対応） ---
+  saveHistory();
+
+  if (tieMode && events.length > 0) {
+    // タイの元になる音：選択中があればそこ、なければ末尾
+    const tieFromIndex = hasSelection ? selectedEventIndex : events.length - 1;
+    const prevEv = events[tieFromIndex];
+    if (!prevEv.isRest) {
+      prevEv.tiedToNext = true;
+    }
+  }
+
+  const newEvent = {
+    durationType: currentDuration,
+    isRest: false,
+    isDotted: isDotted,
+    tiedToNext: false,
+    dynamics: currentDynamics,
+    chords: [{
+      step: currentStep,
+      alter: getAccAlterFromCurrent(),
+      octave: currentOctave
+    }]
+  };
+
+  if (hasSelection) {
+    events.splice(insertIndex, 0, newEvent);
+    selectedEventIndex = insertIndex;
+  } else {
+    events.push(newEvent);
+    selectedEventIndex = events.length - 1;
+  }
+
+  renderScore();
+}
+
 
     function deleteLastEvent() {
       if (selectionMode && selectedEventIndex >= 0 && selectedEventIndex < events.length) {
@@ -1169,12 +1219,13 @@ ${notesXml}
       renderScore();
 
       // 楽譜クリック
-      container.addEventListener("click", (e) => {
-        const svg = container.querySelector("svg");
-        if (svg && svg.contains(e.target) && !selectionMode) {
-          addEventOrChord();
-        }
-      });
+container.addEventListener("click", (e) => {
+  const svg = container.querySelector("svg");
+  if (svg && svg.contains(e.target)) {
+    addEventOrChord();
+  }
+});
+
 
       // 音名
       document.querySelectorAll(".note-name-btn").forEach(btn => {
