@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>スマホ版 作曲アプリ（強弱記号・選択編集機能付き＋スラー）</title>
+  <title>スマホ版 作曲アプリ（強弱・選択・スラー・ビーム・縦画面対応）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
 
   <!-- OSMD CDN -->
@@ -31,30 +31,6 @@
       display: flex;
       flex-direction: column;
       background: #020617;
-    }
-
-    /* 縦向き警告 */
-    .rotate-warning {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: #020617;
-      color: #e5e7eb;
-      z-index: 9999;
-      justify-content: center;
-      align-items: center;
-      text-align: center;
-      padding: 24px;
-      font-size: 1.2rem;
-    }
-
-    @media screen and (orientation: portrait) {
-      .rotate-warning {
-        display: flex;
-      }
-      .app {
-        display: none;
-      }
     }
 
     .header-bar {
@@ -97,11 +73,13 @@
     }
 
     .score-container {
-      flex: 1;
+      flex: 1 1 auto;
       overflow-y: auto;
+      overflow-x: auto;
       -webkit-overflow-scrolling: touch;
       padding: 6px 4px 4px 4px;
       background: #0b1120;
+      position: relative;
     }
 
     #osmd-container {
@@ -152,6 +130,7 @@
       display: flex;
       flex-direction: column;
       gap: 4px;
+      overflow-x: auto;
     }
 
     .control-row {
@@ -251,11 +230,6 @@
   </style>
 </head>
 <body>
-  <div class="rotate-warning">
-    📱 この作曲アプリは横画面用です。<br><br>
-    スマホを横向きにしてください。
-  </div>
-
   <div class="app">
     <!-- 選択モードインジケーター -->
     <div class="selection-mode-indicator" id="selection-indicator">選択中</div>
@@ -311,7 +285,7 @@
     </div>
 
     <!-- 楽譜表示 -->
-    <div class="score-container" style="position: relative;">
+    <div class="score-container">
       <div id="osmd-container"></div>
     </div>
 
@@ -399,7 +373,7 @@
   </div>
 
   <script>
-    // 画面高さ調整
+    // 画面高さ調整（スマホ用）
     function setAppHeight() {
       document.documentElement.style.setProperty(
         "--app-height",
@@ -415,6 +389,7 @@
     let synth = null;
     let isPlaying = false;
     let playStopTimer = null;
+
     // 現在の設定
     let currentStep = "C";
     let currentAcc = "natural"; // natural | sharp | flat
@@ -1154,106 +1129,106 @@ ${notesXml}
       renderScore();
     }
 
-   async function playScore() {
-  // すでに再生中 → 停止処理
-  if (isPlaying) {
-    if (playStopTimer) {
-      clearTimeout(playStopTimer);
-      playStopTimer = null;
-    }
-    if (synth) {
-      try {
-        synth.dispose(); // 即終了
-      } catch (e) {
-        console.error(e);
+    // 再生（Transportを使わない版・何度でも再生可）
+    async function playScore() {
+      // すでに再生中 → 停止処理
+      if (isPlaying) {
+        if (playStopTimer) {
+          clearTimeout(playStopTimer);
+          playStopTimer = null;
+        }
+        if (synth) {
+          try {
+            synth.dispose(); // 即終了
+          } catch (e) {
+            console.error(e);
+          }
+          synth = null;
+        }
+        isPlaying = false;
+        const btn = document.getElementById("btn-play");
+        btn.classList.remove("playing");
+        btn.textContent = "▶ 再生";
+        return;
       }
-      synth = null;
+
+      // 何もないなら鳴らさない
+      if (!events.length) return;
+
+      // AudioContext を起動
+      await Tone.start();
+
+      // 毎回まっさらなシンセを作る（Transportトラブル回避）
+      if (synth) {
+        try { synth.dispose(); } catch (e) { console.error(e); }
+      }
+      synth = new Tone.PolySynth(Tone.Synth).toDestination();
+
+      const tempo = parseInt(document.getElementById("tempo").value || "120", 10);
+      const secondsPerBeat = 60 / tempo;
+
+      const dynamicsVolume = {
+        "pp": -24,
+        "p": -18,
+        "mp": -12,
+        "mf": -6,
+        "f": 0,
+        "ff": 3
+      };
+
+      const startTime = Tone.now();
+      let currentBeat = 0;
+
+      let i = 0;
+      while (i < events.length) {
+        const ev = events[i];
+        let { beats } = durationToXml(ev.durationType, ev.isDotted);
+        let totalBeats = beats;
+
+        // タイでつながっている音をまとめる
+        let j = i;
+        while (events[j] && events[j].tiedToNext && events[j + 1]) {
+          const nextEv = events[j + 1];
+          const nextDur = durationToXml(nextEv.durationType, nextEv.isDotted);
+          totalBeats += nextDur.beats;
+          j++;
+        }
+
+        if (!ev.isRest && ev.chords && ev.chords.length > 0) {
+          const notes = ev.chords.map(ch => {
+            const acc =
+              ch.alter === 1 ? "#" :
+              ch.alter === -1 ? "b" : "";
+            return `${ch.step}${acc}${ch.octave}`;
+          });
+
+          const time = startTime + currentBeat * secondsPerBeat;
+          const durSeconds = totalBeats * secondsPerBeat;
+          const volume = dynamicsVolume[ev.dynamics] ?? -6;
+
+          synth.volume.setValueAtTime(volume, time);
+          synth.triggerAttackRelease(notes, durSeconds, time);
+        }
+
+        currentBeat += totalBeats;
+        i = j + 1;
+      }
+
+      const totalSeconds = currentBeat * secondsPerBeat;
+
+      isPlaying = true;
+      const btn = document.getElementById("btn-play");
+      btn.classList.add("playing");
+      btn.textContent = "■ 停止";
+
+      playStopTimer = setTimeout(() => {
+        isPlaying = false;
+        const b = document.getElementById("btn-play");
+        b.classList.remove("playing");
+        b.textContent = "▶ 再生";
+        // synth は次回再生時に作り直す
+      }, totalSeconds * 1000 + 200);
     }
-    isPlaying = false;
-    const btn = document.getElementById("btn-play");
-    btn.classList.remove("playing");
-    btn.textContent = "▶ 再生";
-    return;
-  }
-
-  // 何もないなら鳴らさない
-  if (!events.length) return;
-
-  // AudioContext を起動
-  await Tone.start();
-
-  // 毎回まっさらなシンセを作る（Transportトラブル回避）
-  if (synth) {
-    try { synth.dispose(); } catch (e) { console.error(e); }
-  }
-  synth = new Tone.PolySynth(Tone.Synth).toDestination();
-
-  const tempo = parseInt(document.getElementById("tempo").value || "120", 10);
-  const secondsPerBeat = 60 / tempo;
-
-  const dynamicsVolume = {
-    "pp": -24,
-    "p": -18,
-    "mp": -12,
-    "mf": -6,
-    "f": 0,
-    "ff": 3
-  };
-
-  const startTime = Tone.now();
-  let currentBeat = 0;
-
-  let i = 0;
-  while (i < events.length) {
-    const ev = events[i];
-    let { beats } = durationToXml(ev.durationType, ev.isDotted);
-    let totalBeats = beats;
-
-    // タイでつながっている音をまとめる
-    let j = i;
-    while (events[j] && events[j].tiedToNext && events[j + 1]) {
-      const nextEv = events[j + 1];
-      const nextDur = durationToXml(nextEv.durationType, nextEv.isDotted);
-      totalBeats += nextDur.beats;
-      j++;
-    }
-
-    if (!ev.isRest && ev.chords && ev.chords.length > 0) {
-      const notes = ev.chords.map(ch => {
-        const acc =
-          ch.alter === 1 ? "#" :
-          ch.alter === -1 ? "b" : "";
-        return `${ch.step}${acc}${ch.octave}`;
-      });
-
-      const time = startTime + currentBeat * secondsPerBeat;
-      const durSeconds = totalBeats * secondsPerBeat;
-      const volume = dynamicsVolume[ev.dynamics] ?? -6;
-
-      synth.volume.setValueAtTime(volume, time);
-      synth.triggerAttackRelease(notes, durSeconds, time);
-    }
-
-    currentBeat += totalBeats;
-    i = j + 1;
-  }
-
-  const totalSeconds = currentBeat * secondsPerBeat;
-
-  isPlaying = true;
-  const btn = document.getElementById("btn-play");
-  btn.classList.add("playing");
-  btn.textContent = "■ 停止";
-
-  playStopTimer = setTimeout(() => {
-    isPlaying = false;
-    const b = document.getElementById("btn-play");
-    b.classList.remove("playing");
-    b.textContent = "▶ 再生";
-    // synth は次回再生時に作り直す
-  }, totalSeconds * 1000 + 200);
-}
-
 
     window.addEventListener("DOMContentLoaded", () => {
       const container = document.getElementById("osmd-container");
@@ -1266,7 +1241,7 @@ ${notesXml}
         coloringMode: 1,
         defaultColorNotehead: "#000000",
         defaultColorStem: "#000000",
-          autoBeam:true 
+        autoBeam: true
       });
 
       renderScore();
