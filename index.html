@@ -414,7 +414,7 @@
     let osmd = null;
     let synth = null;
     let isPlaying = false;
-
+    let playStopTimer = null;
     // 現在の設定
     let currentStep = "C";
     let currentAcc = "natural"; // natural | sharp | flat
@@ -1154,93 +1154,106 @@ ${notesXml}
       renderScore();
     }
 
-    async function playScore() {
-      if (isPlaying) {
-        Tone.Transport.stop();
-        Tone.Transport.cancel();
-        isPlaying = false;
-        const b = document.getElementById("btn-play");
-        b.classList.remove("playing");
-        b.textContent = "▶ 再生";
-        return;
-      }
-
-      if (!synth) {
-        await Tone.start();
-        synth = new Tone.PolySynth(Tone.Synth).toDestination();
-      }
-
-      Tone.Transport.stop();
-      Tone.Transport.cancel();
-
-      const tempo = parseInt(document.getElementById("tempo").value || "120", 10);
-      Tone.Transport.bpm.value = tempo;
-
-      let currentBeat = 0;
-
-      // ダイナミクスの音量マッピング
-      const dynamicsVolume = {
-        "pp": -24,
-        "p": -18,
-        "mp": -12,
-        "mf": -6,
-        "f": 0,
-        "ff": 3
-      };
-
-      let i = 0;
-      while (i < events.length) {
-        const ev = events[i];
-        let { beats } = durationToXml(ev.durationType, ev.isDotted);
-        let totalBeats = beats;
-
-        // タイでつながっている連続イベントをまとめる
-        let j = i;
-        while (events[j] && events[j].tiedToNext && events[j + 1]) {
-          const nextEv = events[j + 1];
-          const nextDur = durationToXml(nextEv.durationType, nextEv.isDotted);
-          totalBeats += nextDur.beats;
-          j++;
-        }
-
-        if (!ev.isRest && ev.chords && ev.chords.length > 0) {
-          const notes = ev.chords.map(ch => {
-            const acc =
-              ch.alter === 1 ? "#" :
-              ch.alter === -1 ? "b" : "";
-            return `${ch.step}${acc}${ch.octave}`;
-          });
-
-          const startTime = `${currentBeat} * 4n`;
-          const durBeats = totalBeats;
-          const volume = dynamicsVolume[ev.dynamics] || -6;
-          
-          synth.volume.setValueAtTime(volume, Tone.Time(startTime));
-          synth.triggerAttackRelease(
-            notes,
-            `${durBeats} * 4n`,
-            Tone.Time(startTime)
-          );
-        }
-
-        currentBeat += totalBeats;
-        i = j + 1;
-      }
-
-      const totalSeconds = Tone.Time(`${currentBeat} * 4n`).toSeconds();
-      setTimeout(() => {
-        isPlaying = false;
-        const btn = document.getElementById("btn-play");
-        btn.classList.remove("playing");
-        btn.textContent = "▶ 再生";
-      }, totalSeconds * 1000 + 200);
-
-      isPlaying = true;
-      const btn = document.getElementById("btn-play");
-      btn.classList.add("playing");
-      btn.textContent = "■ 停止";
-      Tone.Transport.start();
+   async function playScore() {
+  // すでに再生中 → 停止処理
+  if (isPlaying) {
+    if (playStopTimer) {
+      clearTimeout(playStopTimer);
+      playStopTimer = null;
     }
+    if (synth) {
+      try {
+        synth.dispose(); // 即終了
+      } catch (e) {
+        console.error(e);
+      }
+      synth = null;
+    }
+    isPlaying = false;
+    const btn = document.getElementById("btn-play");
+    btn.classList.remove("playing");
+    btn.textContent = "▶ 再生";
+    return;
+  }
+
+  // 何もないなら鳴らさない
+  if (!events.length) return;
+
+  // AudioContext を起動
+  await Tone.start();
+
+  // 毎回まっさらなシンセを作る（Transportトラブル回避）
+  if (synth) {
+    try { synth.dispose(); } catch (e) { console.error(e); }
+  }
+  synth = new Tone.PolySynth(Tone.Synth).toDestination();
+
+  const tempo = parseInt(document.getElementById("tempo").value || "120", 10);
+  const secondsPerBeat = 60 / tempo;
+
+  const dynamicsVolume = {
+    "pp": -24,
+    "p": -18,
+    "mp": -12,
+    "mf": -6,
+    "f": 0,
+    "ff": 3
+  };
+
+  const startTime = Tone.now();
+  let currentBeat = 0;
+
+  let i = 0;
+  while (i < events.length) {
+    const ev = events[i];
+    let { beats } = durationToXml(ev.durationType, ev.isDotted);
+    let totalBeats = beats;
+
+    // タイでつながっている音をまとめる
+    let j = i;
+    while (events[j] && events[j].tiedToNext && events[j + 1]) {
+      const nextEv = events[j + 1];
+      const nextDur = durationToXml(nextEv.durationType, nextEv.isDotted);
+      totalBeats += nextDur.beats;
+      j++;
+    }
+
+    if (!ev.isRest && ev.chords && ev.chords.length > 0) {
+      const notes = ev.chords.map(ch => {
+        const acc =
+          ch.alter === 1 ? "#" :
+          ch.alter === -1 ? "b" : "";
+        return `${ch.step}${acc}${ch.octave}`;
+      });
+
+      const time = startTime + currentBeat * secondsPerBeat;
+      const durSeconds = totalBeats * secondsPerBeat;
+      const volume = dynamicsVolume[ev.dynamics] ?? -6;
+
+      synth.volume.setValueAtTime(volume, time);
+      synth.triggerAttackRelease(notes, durSeconds, time);
+    }
+
+    currentBeat += totalBeats;
+    i = j + 1;
+  }
+
+  const totalSeconds = currentBeat * secondsPerBeat;
+
+  isPlaying = true;
+  const btn = document.getElementById("btn-play");
+  btn.classList.add("playing");
+  btn.textContent = "■ 停止";
+
+  playStopTimer = setTimeout(() => {
+    isPlaying = false;
+    const b = document.getElementById("btn-play");
+    b.classList.remove("playing");
+    b.textContent = "▶ 再生";
+    // synth は次回再生時に作り直す
+  }, totalSeconds * 1000 + 200);
+}
+
 
     window.addEventListener("DOMContentLoaded", () => {
       const container = document.getElementById("osmd-container");
